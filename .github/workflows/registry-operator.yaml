@@ -26,7 +26,7 @@ jobs:
   verify-chart:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The vendored Harbor chart tarball is committed under
       # registry/charts/. CHECKSUMS.txt pins each tarball's SHA-256. Any
@@ -51,9 +51,9 @@ jobs:
     needs: verify-chart
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: registry/go.mod
           cache-dependency-path: registry/go.sum
@@ -73,7 +73,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Compute image name
         env:
@@ -91,7 +91,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push registry-operator
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./registry
           platforms: linux/amd64,linux/arm64
