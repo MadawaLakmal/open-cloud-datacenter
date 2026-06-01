@@ -17,8 +17,7 @@
 |---|---|---|---|
 | Key Vault | [`keyvault/`](./keyvault/) | v0.0.x | `keyvault.opencloud.wso2.com` |
 | Database | [`database/`](./database/) | v0.0.x | `dbaas.opencloud.wso2.com` |
-
-Future operators (Registry, etc.) will land alongside.
+| Registry | [`registry/`](./registry/) | v0.0.x | `registry.opencloud.wso2.com` |
 
 ## Layout convention
 
