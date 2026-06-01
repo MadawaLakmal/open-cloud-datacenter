@@ -28,3 +28,9 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Personal context files for AI assistants and working notes. Both are
+# kept up to date as the codebase evolves but never enter commits — they
+# carry per-user preferences and conventions that should not bind upstream.
+CLAUDE.md
+docs/walkthrough.md
