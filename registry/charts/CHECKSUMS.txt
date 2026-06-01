@@ -1,1 +1,1 @@
-7cc3fbab53086efccf192f4ccbdd6f6d0d5ddce24c8f073ea3c604fc15d96985  charts/harbor-1.14.0.tgz
+7cc3fbab53086efccf192f4ccbdd6f6d0d5ddce24c8f073ea3c604fc15d96985  harbor-1.14.0.tgz
