@@ -1,0 +1,28 @@
+# Sample RegistryBackend — one Harbor cluster for tenant "acme".
+# dc-api creates these in a real deployment; for manual testing, create the
+# tenant namespace first (kubectl create ns dc-tenant-acme) then apply this.
+
+apiVersion: registry.opencloud.wso2.com/v1alpha1
+kind: RegistryBackend
+metadata:
+  name: harbor
+  namespace: dc-tenant-acme
+  labels:
+    app.kubernetes.io/name: registry
+    app.kubernetes.io/managed-by: kustomize
+    # dc-api wire-contract labels (propagated to every child object the
+    # operator creates — see internal/controller/common.go).
+    dc-api.wso2.com/tenant: acme
+    dc-api.wso2.com/tenant-uuid: "00000000-0000-0000-0000-000000000001"
+    dc-api.wso2.com/resource-kind: registry-backend
+spec:
+  harborVersion: "1.14.0"
+  cpu: "2"
+  memoryGB: 4
+  storageGB: 50
+  storageClass: longhorn   # leave empty to use the cluster's default StorageClass
+  engineConfig:
+    haReplicas: 1
+    addons:
+      trivy:
+        enabled: false      # opt in per-tenant when scanning is required

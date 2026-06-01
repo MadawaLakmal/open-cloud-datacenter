@@ -1,0 +1,27 @@
+# Harvester Dev overlay.
+#
+# Apply with:
+#   kustomize build registry/config/envs/harvester-dev | kubectl apply -f -
+# Or:
+#   make deploy IMG=ghcr.io/<your-user>/registry-operator:dev
+# then patch the overlay separately if you want the env-specific knobs.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../default
+
+# Pin the operator image. Override on the command line:
+#   kustomize edit set image controller=ghcr.io/<you>/registry-operator:<tag>
+images:
+  - name: controller
+    newName: ghcr.io/example/registry-operator
+    newTag: dev
+
+# Dev-specific manager Deployment knobs (verbose log, single replica).
+patches:
+  - path: manager_patch.yaml
+    target:
+      kind: Deployment
+      name: controller-manager

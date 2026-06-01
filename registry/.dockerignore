@@ -1,0 +1,17 @@
+# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
+# Ignore everything by default and re-include only what the image needs.
+**
+
+# Go sources (no tests).
+!**/*.go
+**/*_test.go
+
+# Go module files.
+!go.mod
+!go.sum
+
+# Vendored Harbor chart tarballs — copied into the runtime image at /charts/
+# so the helm runner can load them offline (no network at reconcile time).
+# See charts/README.md.
+!charts/
+!charts/**

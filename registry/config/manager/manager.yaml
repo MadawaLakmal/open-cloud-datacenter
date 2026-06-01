@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: registry
+    app.kubernetes.io/managed-by: kustomize
+  name: system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: registry
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: registry
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+        app.kubernetes.io/name: registry
+    spec:
+      securityContext:
+        # Restricted Pod Security Standard. 65532 is the nonroot UID/GID
+        # in gcr.io/distroless/static:nonroot. Helm's lock files and
+        # rendered chart data land under /tmp, so we need write there.
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          # Replaced by `kustomize edit set image controller=<your-image>` at
+          # deploy time via `make deploy IMG=ghcr.io/<user>/registry-operator:<tag>`.
+          image: controller:latest
+          command:
+            - /manager
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+          ports:
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          env:
+            # Helm SDK writes its cache, config, and data dirs under these
+            # paths. Distroless has no /home/nonroot; redirect everything to
+            # /tmp which IS writable thanks to the emptyDir below.
+            - name: HOME
+              value: /tmp
+            - name: HELM_CACHE_HOME
+              value: /tmp/.cache/helm
+            - name: HELM_CONFIG_HOME
+              value: /tmp/.config/helm
+            - name: HELM_DATA_HOME
+              value: /tmp/.local/share/helm
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      serviceAccountName: controller-manager
+      terminationGracePeriodSeconds: 10

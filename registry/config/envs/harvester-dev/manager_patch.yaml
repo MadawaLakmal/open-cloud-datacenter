@@ -1,0 +1,18 @@
+# Patches applied to the controller-manager Deployment in the
+# harvester-dev environment. Single replica, verbose logging.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: manager
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --zap-log-level=debug

@@ -1,0 +1,30 @@
+# Sample RegistryInstance — one Harbor-project for project "billing" inside
+# tenant "acme". Requires the RegistryBackend "harbor" above to be Ready.
+# Create the project namespace first (kubectl create ns dc-acme-billing).
+
+apiVersion: registry.opencloud.wso2.com/v1alpha1
+kind: RegistryInstance
+metadata:
+  name: billing-registry
+  namespace: dc-acme-billing
+  labels:
+    app.kubernetes.io/name: registry
+    app.kubernetes.io/managed-by: kustomize
+    dc-api.wso2.com/tenant: acme
+    dc-api.wso2.com/project: billing
+    dc-api.wso2.com/tenant-uuid: "00000000-0000-0000-0000-000000000001"
+    dc-api.wso2.com/project-uuid: "00000000-0000-0000-0000-000000000002"
+    dc-api.wso2.com/resource-uuid: "00000000-0000-0000-0000-000000000003"
+    dc-api.wso2.com/resource-kind: registry
+    dc-api.wso2.com/resource-name: billing-registry
+spec:
+  backendRef:
+    name: harbor
+    namespace: dc-tenant-acme
+  projectName: billing
+  engineConfig:
+    public: false
+    tagImmutability: true
+    retention:
+      keepLastTags: 20
+      untaggedTTLDays: 7

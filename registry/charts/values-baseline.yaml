@@ -1,0 +1,29 @@
+# Baseline values applied to every Harbor install.
+#
+# The RegistryBackendReconciler merges the user-driven values from the CR's
+# spec (admin password, expose type, storage class, addon toggles) on top of
+# this baseline. Edit this file only when a chart-wide invariant changes
+# (e.g. a new Harbor sub-component is added and we want it off by default).
+#
+# Per-CR overrides live in code (buildHelmValues), NOT here.
+
+# Default Harbor sub-component sizing. The CR can override storage on the
+# registry component; the rest stays at small dev-friendly values until a
+# tenant chooses to size them.
+
+trivy:
+  enabled: false        # opt-in addon; see api/v1alpha1/registrybackend_types.go
+
+chartmuseum:
+  enabled: false        # deprecated by Harbor upstream; we keep it off
+
+notary:
+  enabled: false        # removed in Harbor 2.10+; explicit off for safety
+
+metrics:
+  enabled: true         # ServiceMonitor scrape is enabled by default
+
+# Internal TLS is disabled for v0.1. dc-api's PrivateEndpoint primitive
+# terminates external TLS; internal hops stay HTTP for simplicity.
+internalTLS:
+  enabled: false
