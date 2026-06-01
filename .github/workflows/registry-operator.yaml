@@ -16,8 +16,11 @@ on:
       - '.github/workflows/registry-operator.yaml'
   workflow_dispatch:
 
-env:
-  IMAGE: ghcr.io/wso2/registry-operator
+# IMAGE is computed per-job from github.repository_owner (lower-cased) so
+# the workflow works unchanged on any fork. wso2/open-cloud-datacenter
+# pushes to ghcr.io/wso2/registry-operator; contributor forks push to
+# ghcr.io/<their-user>/registry-operator. GHCR requires lowercase names,
+# hence the bash lowercase expansion in the "Compute image name" step.
 
 jobs:
   verify-chart:
@@ -71,6 +74,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute image name
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE=ghcr.io/${OWNER,,}/registry-operator" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
