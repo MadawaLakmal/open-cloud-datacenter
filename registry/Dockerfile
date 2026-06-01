@@ -8,7 +8,7 @@
 # cross-compiles to TARGETOS/TARGETARCH via env vars; this avoids QEMU
 # segfaults during `go mod download` of large dep trees (Helm SDK).
 
-FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
