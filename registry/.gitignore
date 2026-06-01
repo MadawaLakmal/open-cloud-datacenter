@@ -29,8 +29,13 @@ go.work
 # Kubeconfig might contain secrets
 *.kubeconfig
 
-# Personal context files for AI assistants and working notes. Both are
+# Personal context files for AI assistants and working notes. They are
 # kept up to date as the codebase evolves but never enter commits — they
 # carry per-user preferences and conventions that should not bind upstream.
 CLAUDE.md
 docs/walkthrough.md
+
+# Local reference archive — historical SaaS-Registry POC docs, Harbor
+# helm-values + provisioning notes, prior ADRs, security reference notes.
+# Preserved for offline reading; not part of the operator release.
+.archive/
