@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/go-logr/logr v1.4.2
+	github.com/onsi/ginkgo/v2 v2.19.0
+	github.com/onsi/gomega v1.33.1
 	helm.sh/helm/v3 v3.16.4
 	k8s.io/api v0.31.3
 	k8s.io/apimachinery v0.31.3
