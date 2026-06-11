@@ -16,6 +16,20 @@ import (
 	"time"
 )
 
+// HarborClient is the interface the Instance reconciler uses to talk to Harbor.
+// *Client satisfies it; tests inject a fake implementation.
+type HarborClient interface {
+	Health(ctx context.Context) error
+	CreateProject(ctx context.Context, name string, public bool) (int, error)
+	GetProjectByName(ctx context.Context, name string) (Project, error)
+	DeleteProject(ctx context.Context, id int) error
+	UpdateProjectVisibility(ctx context.Context, id int, public bool) error
+	CreateRobot(ctx context.Context, project, name, scope string, expiresAt time.Time) (Robot, error)
+	DeleteRobot(ctx context.Context, project string, id int) error
+	EnableImmutableTagRule(ctx context.Context, project string) error
+	SetRetentionPolicy(ctx context.Context, project string, r Retention) error
+}
+
 // Client is bound to one tenant Harbor instance.
 type Client struct {
 	BaseURL  string // e.g. http://harbor-harbor-core.dc-tenant-acme.svc.cluster.local

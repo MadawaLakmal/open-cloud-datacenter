@@ -134,8 +134,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.RegistryInstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		HarborFactory: controller.DefaultHarborFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "failed to create controller", "controller", "registryinstance")
 		os.Exit(1)

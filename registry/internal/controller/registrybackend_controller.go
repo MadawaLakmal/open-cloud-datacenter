@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"helm.sh/helm/v3/pkg/release"
+
 	registryv1alpha1 "github.com/wso2/open-cloud-datacenter/operators/registry/api/v1alpha1"
 	"github.com/wso2/open-cloud-datacenter/operators/registry/internal/helmrunner"
 )
@@ -26,12 +28,19 @@ import (
 // encoded by the namespace (e.g. dc-tenant-acme).
 const HelmReleaseName = "harbor"
 
+// HelmEnsurer is the interface the Backend reconciler uses to install and
+// uninstall Harbor. *helmrunner.Runner satisfies it; tests inject a fake.
+type HelmEnsurer interface {
+	Ensure(ctx context.Context, opts helmrunner.InstallOptions) (*release.Release, error)
+	Uninstall(ctx context.Context, releaseName, namespace string) error
+}
+
 // RegistryBackendReconciler reconciles RegistryBackend CRs. One RegistryBackend
 // corresponds to one Harbor cluster Helm-installed into a tenant namespace.
 type RegistryBackendReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Helm   *helmrunner.Runner
+	Helm   HelmEnsurer
 
 	// HarborInstallTimeout bounds each helm install/upgrade. Default 10m.
 	// Configurable via the manager's Deployment env.

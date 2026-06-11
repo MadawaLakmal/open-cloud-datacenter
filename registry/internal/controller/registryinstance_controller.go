@@ -20,11 +20,21 @@ import (
 	"github.com/wso2/open-cloud-datacenter/operators/registry/internal/harbor"
 )
 
+// HarborFactory builds a HarborClient from an admin credential triple.
+// harbor.New satisfies this signature; tests inject a fake factory.
+type HarborFactory func(baseURL, user, pass string) harbor.HarborClient
+
+// DefaultHarborFactory is the production factory — builds a *harbor.Client.
+var DefaultHarborFactory HarborFactory = func(baseURL, user, pass string) harbor.HarborClient {
+	return harbor.New(baseURL, user, pass)
+}
+
 // RegistryInstanceReconciler reconciles RegistryInstance CRs. Each Instance
 // maps to one Harbor-project + one robot account inside the tenant's Harbor.
 type RegistryInstanceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme         *runtime.Scheme
+	HarborFactory  HarborFactory // defaults to DefaultHarborFactory if nil
 }
 
 // +kubebuilder:rbac:groups=registry.opencloud.wso2.com,resources=registryinstances,verbs=get;list;watch;create;update;patch;delete
@@ -137,10 +147,9 @@ func (r *RegistryInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-// resolveBackend looks up the Backend named in spec.backendRef (using the
-// namespace the CR itself carries — no derivation), then builds a Harbor
-// client from its admin Secret.
-func (r *RegistryInstanceReconciler) resolveBackend(ctx context.Context, ri *registryv1alpha1.RegistryInstance) (*registryv1alpha1.RegistryBackend, *harbor.Client, error) {
+// resolveBackend looks up the Backend named in spec.backendRef, then builds
+// a Harbor client from its admin Secret using r.harborFactory().
+func (r *RegistryInstanceReconciler) resolveBackend(ctx context.Context, ri *registryv1alpha1.RegistryInstance) (*registryv1alpha1.RegistryBackend, harbor.HarborClient, error) {
 	backendNS := ri.Spec.BackendRef.Namespace
 	backendName := ri.Spec.BackendRef.Name
 
@@ -161,11 +170,19 @@ func (r *RegistryInstanceReconciler) resolveBackend(ctx context.Context, ri *reg
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", rb.Status.Endpoint.Address, rb.Status.Endpoint.Port)
-	hc := harbor.New(baseURL,
+	hc := r.harborFactory()(baseURL,
 		string(adminSecret.Data["username"]),
 		string(adminSecret.Data["password"]),
 	)
 	return &rb, hc, nil
+}
+
+// harborFactory returns HarborFactory, falling back to DefaultHarborFactory.
+func (r *RegistryInstanceReconciler) harborFactory() HarborFactory {
+	if r.HarborFactory != nil {
+		return r.HarborFactory
+	}
+	return DefaultHarborFactory
 }
 
 // ensureRobotSecret creates the robot account (if status doesn't already
@@ -173,7 +190,7 @@ func (r *RegistryInstanceReconciler) resolveBackend(ctx context.Context, ri *reg
 func (r *RegistryInstanceReconciler) ensureRobotSecret(
 	ctx context.Context,
 	ri *registryv1alpha1.RegistryInstance,
-	hc *harbor.Client,
+	hc harbor.HarborClient,
 	secretName, harborAddress string,
 ) (*corev1.Secret, harbor.Robot, error) {
 	// If the secret already exists and status already has a robot id, trust
@@ -224,7 +241,7 @@ func (r *RegistryInstanceReconciler) ensureRobotSecret(
 	return sec, robot, nil
 }
 
-func (r *RegistryInstanceReconciler) reconcileDelete(ctx context.Context, ri *registryv1alpha1.RegistryInstance, hc *harbor.Client, log logr.Logger) (ctrl.Result, error) {
+func (r *RegistryInstanceReconciler) reconcileDelete(ctx context.Context, ri *registryv1alpha1.RegistryInstance, hc harbor.HarborClient, log logr.Logger) (ctrl.Result, error) {
 	if !hasFinalizer(ri.Finalizers, InstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
