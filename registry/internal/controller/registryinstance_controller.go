@@ -102,18 +102,24 @@ func (r *RegistryInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	ri.Status.HarborProjectID = projectID
 
-	// Step 2: optional one-shot project bootstrap.
-	if cfg.TagImmutability {
-		if err := hc.EnableImmutableTagRule(ctx, ri.Spec.ProjectName); err != nil {
-			log.Info("enable immutable tag rule (continuing)", "project", ri.Spec.ProjectName, "err", err)
+	// Step 2: one-shot project bootstrap — only on first provision.
+	// Gated on RobotID == 0: the robot is created in step 3 and its ID is
+	// persisted to status, so a non-zero value means we have already bootstrapped.
+	// This prevents SetRetentionPolicy from accumulating duplicate policies on
+	// every 5-minute periodic requeue.
+	if ri.Status.RobotID == 0 {
+		if cfg.TagImmutability {
+			if err := hc.EnableImmutableTagRule(ctx, ri.Spec.ProjectName); err != nil {
+				log.Info("enable immutable tag rule (continuing)", "project", ri.Spec.ProjectName, "err", err)
+			}
 		}
-	}
-	if cfg.Retention != nil && (cfg.Retention.KeepLastTags > 0 || cfg.Retention.UntaggedTTLDays > 0) {
-		if err := hc.SetRetentionPolicy(ctx, ri.Spec.ProjectName, harbor.Retention{
-			KeepLastTags:    cfg.Retention.KeepLastTags,
-			UntaggedTTLDays: cfg.Retention.UntaggedTTLDays,
-		}); err != nil {
-			log.Info("set retention (continuing)", "project", ri.Spec.ProjectName, "err", err)
+		if cfg.Retention != nil && (cfg.Retention.KeepLastTags > 0 || cfg.Retention.UntaggedTTLDays > 0) {
+			if err := hc.SetRetentionPolicy(ctx, ri.Spec.ProjectName, harbor.Retention{
+				KeepLastTags:    cfg.Retention.KeepLastTags,
+				UntaggedTTLDays: cfg.Retention.UntaggedTTLDays,
+			}); err != nil {
+				log.Info("set retention (continuing)", "project", ri.Spec.ProjectName, "err", err)
+			}
 		}
 	}
 

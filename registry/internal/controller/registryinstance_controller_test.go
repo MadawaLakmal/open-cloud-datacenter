@@ -32,6 +32,9 @@ type fakeHarbor struct {
 	createdRobots    []string
 	deletedRobots    []int
 	updatedVisibility map[int]bool
+
+	immutableTagRuleCallCount int
+	retentionCallCount        int
 }
 
 func newFakeHarbor(projectID int, robotName, robotSecret string) *fakeHarbor {
@@ -73,9 +76,13 @@ func (f *fakeHarbor) DeleteRobot(_ context.Context, _ string, id int) error {
 	return f.deleteRobotErr
 }
 
-func (f *fakeHarbor) EnableImmutableTagRule(_ context.Context, _ string) error { return nil }
+func (f *fakeHarbor) EnableImmutableTagRule(_ context.Context, _ string) error {
+	f.immutableTagRuleCallCount++
+	return nil
+}
 
 func (f *fakeHarbor) SetRetentionPolicy(_ context.Context, _ string, _ harbor.Retention) error {
+	f.retentionCallCount++
 	return nil
 }
 
@@ -306,6 +313,37 @@ var _ = Describe("RegistryInstance Controller", func() {
 	})
 
 	Context("Idempotency — robot already provisioned", func() {
+		It("does not re-apply tagImmutability or retention on subsequent reconciles", func() {
+			readyBackend(backendName)
+
+			ri := newInstance(instanceName, projectNS, backendName, tenantNS, projectName)
+			ri.Finalizers = []string{InstanceFinalizer}
+			ri.Spec.EngineConfig.TagImmutability = true
+			ri.Spec.EngineConfig.Retention = &registryv1alpha1.Retention{KeepLastTags: 10}
+			Expect(k8sClient.Create(ctx, ri)).To(Succeed())
+
+			r := newReconciler()
+			// First reconcile: bootstrap must run exactly once.
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeHC.immutableTagRuleCallCount).To(Equal(1), "immutable tag rule must be set on first reconcile")
+			Expect(fakeHC.retentionCallCount).To(Equal(1), "retention policy must be set on first reconcile")
+
+			// Second reconcile: bootstrap must NOT run again (RobotID is now set).
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeHC.immutableTagRuleCallCount).To(Equal(1), "immutable tag rule must not be re-applied on requeue")
+			Expect(fakeHC.retentionCallCount).To(Equal(1), "retention policy must not accumulate duplicate entries on requeue")
+
+			updated := &registryv1alpha1.RegistryInstance{}
+			Expect(k8sClient.Get(ctx, instanceKey, updated)).To(Succeed())
+			sec := &corev1.Secret{}
+			_ = k8sClient.Get(ctx, types.NamespacedName{
+				Name: updated.Status.Endpoint.SecretRef.Name, Namespace: projectNS,
+			}, sec)
+			_ = k8sClient.Delete(ctx, sec)
+		})
+
 		It("skips robot creation when status.RobotID and creds Secret already exist", func() {
 			readyBackend(backendName)
 
