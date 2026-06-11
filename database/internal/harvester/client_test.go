@@ -18,13 +18,116 @@ package harvester
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
 )
+
+func TestCreatePostgresVMDoesNotCreateSecretWhenImageResolutionFails(t *testing.T) {
+	ctx := context.Background()
+	// client without the fake image — image resolution fails before any Secret is created
+	client := newTestHarvesterClient()
+
+	_, credSecretName, cloudInitSecretName, _, err := client.CreatePostgresVM(ctx, testVMCreateParams())
+	if err == nil {
+		t.Fatalf("CreatePostgresVM returned nil error, want image resolution error")
+	}
+
+	// Neither Secret should exist after an image-resolution failure.
+	if _, err := client.Dynamic.Resource(secretGVR).Namespace("tenant-a").Get(ctx, credSecretName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("credentials Secret should not exist after image-resolution failure, got: %v", err)
+	}
+	if _, err := client.Dynamic.Resource(secretGVR).Namespace("tenant-a").Get(ctx, cloudInitSecretName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("cloudinit Secret should not exist after image-resolution failure, got: %v", err)
+	}
+}
+
+func TestCreatePostgresVMCreatesBothSecretsAndReturnsCA(t *testing.T) {
+	ctx := context.Background()
+	client := newTestHarvesterClient(testVMImage())
+
+	vmName, credSecretName, cloudInitSecretName, caCertPEM, err := client.CreatePostgresVM(ctx, testVMCreateParams())
+	if err != nil {
+		t.Fatalf("CreatePostgresVM returned error: %v", err)
+	}
+	if vmName != "pg-orders" {
+		t.Fatalf("VM name = %q, want pg-orders", vmName)
+	}
+	if credSecretName != "pg-orders-credentials" {
+		t.Fatalf("credentials Secret name = %q, want pg-orders-credentials", credSecretName)
+	}
+	if cloudInitSecretName != "pg-orders-cloudinit" {
+		t.Fatalf("cloudinit Secret name = %q, want pg-orders-cloudinit", cloudInitSecretName)
+	}
+	if caCertPEM == "" {
+		t.Fatalf("CA cert is empty")
+	}
+
+	// credentials Secret must exist and contain the CA.
+	// Fake client stores stringData as-is (no base64 encoding like the real API server).
+	credSecret, err := client.Dynamic.Resource(secretGVR).Namespace("tenant-a").Get(ctx, credSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get credentials Secret: %v", err)
+	}
+	secretCA, _, _ := unstructured.NestedString(credSecret.Object, "stringData", "ca_cert")
+	if secretCA == "" {
+		t.Fatalf("credentials Secret has no stringData.ca_cert")
+	}
+	if caCertPEM != secretCA {
+		t.Fatalf("returned CA does not match Secret CA")
+	}
+
+	// cloudinit Secret must exist and contain userdata.
+	cloudInitSecret, err := client.Dynamic.Resource(secretGVR).Namespace("tenant-a").Get(ctx, cloudInitSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get cloudinit Secret: %v", err)
+	}
+	userdata, _, _ := unstructured.NestedString(cloudInitSecret.Object, "stringData", "userdata")
+	if userdata == "" {
+		t.Fatalf("cloudinit Secret has no stringData.userdata")
+	}
+
+	// VM must exist.
+	if _, err := client.Dynamic.Resource(vmGVR).Namespace("tenant-a").Get(ctx, vmName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("get created VM: %v", err)
+	}
+}
+
+func TestCreatePostgresVMPreservesKubeOVNSettings(t *testing.T) {
+	ctx := context.Background()
+	client := newTestHarvesterClient(testVMImage())
+	client.MgmtLogicalSwitch = "ovn-default"
+	params := testVMCreateParams()
+	params.DNSServerIP = "10.96.0.10/32"
+
+	vmName, _, _, _, err := client.CreatePostgresVM(ctx, params)
+	if err != nil {
+		t.Fatalf("CreatePostgresVM returned error: %v", err)
+	}
+	vm, err := client.Dynamic.Resource(vmGVR).Namespace("tenant-a").Get(ctx, vmName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created VM: %v", err)
+	}
+
+	logicalSwitch, _, _ := unstructured.NestedString(vm.Object, "spec", "template", "metadata", "annotations", "ovn.kubernetes.io/logical_switch")
+	if logicalSwitch != "ovn-default" {
+		t.Fatalf("logical switch annotation = %q, want ovn-default", logicalSwitch)
+	}
+	dnsPolicy, _, _ := unstructured.NestedString(vm.Object, "spec", "template", "spec", "dnsPolicy")
+	if dnsPolicy != "None" {
+		t.Fatalf("dnsPolicy = %q, want None", dnsPolicy)
+	}
+	nameservers, _, _ := unstructured.NestedStringSlice(vm.Object, "spec", "template", "spec", "dnsConfig", "nameservers")
+	if len(nameservers) != 1 || nameservers[0] != "10.96.0.10" {
+		t.Fatalf("nameservers = %v, want [10.96.0.10]", nameservers)
+	}
+}
 
 func TestDeployMonitoringIsIdempotent(t *testing.T) {
 	client := NewClient(fake.NewSimpleDynamicClient(runtime.NewScheme()), "https://grafana.example")
@@ -70,4 +173,44 @@ func TestDeployMonitoringIsIdempotent(t *testing.T) {
 	if address["ip"] != "192.168.40.50" {
 		t.Fatalf("Endpoint IP = %v, want 192.168.40.50", address["ip"])
 	}
+}
+
+// Helpers
+func newTestHarvesterClient(objs ...runtime.Object) *Client {
+	listKinds := map[schema.GroupVersionResource]string{
+		vmImageGVR: "VirtualMachineImageList",
+	}
+	return NewClient(fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objs...), "")
+}
+
+func testVMCreateParams() VMCreateParams {
+	return VMCreateParams{
+		ID:             "orders",
+		Namespace:      "tenant-a",
+		CPUCores:       2,
+		MemoryMB:       4096,
+		OSImage:        "ubuntu-22.04",
+		DataVolumeRef:  "pg-orders-data",
+		NADName:        "tenant-a/vm-network",
+		MasterUser:     "dbadmin",
+		DBName:         "orders",
+		Port:           5432,
+		MaxConnections: 100,
+	}
+}
+
+func testVMImage() *unstructured.Unstructured {
+	img := newUnstructured("harvesterhci.io/v1beta1", "VirtualMachineImage", "ubuntu-22.04", "default")
+	// set status.storageClassName to indicate the fake VM Image is ready
+	_ = unstructured.SetNestedField(img.Object, "longhorn-image-ubuntu", "status", "storageClassName")
+	return img
+}
+
+func testCredentialSecret(caCert string) *unstructured.Unstructured {
+	secret := newUnstructured("v1", "Secret", "pg-orders-credentials", "tenant-a")
+	_ = unstructured.SetNestedField(secret.Object, "Opaque", "type")
+	_ = unstructured.SetNestedStringMap(secret.Object, map[string]string{
+		"ca_cert": base64.StdEncoding.EncodeToString([]byte(caCert)),
+	}, "data")
+	return secret
 }

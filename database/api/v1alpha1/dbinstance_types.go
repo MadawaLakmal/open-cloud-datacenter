@@ -354,6 +354,12 @@ type ResourceRefs struct {
 	VMName string `json:"vmName,omitempty"`
 	// +optional
 	SecretName string `json:"secretName,omitempty"`
+	// CloudInitSecretName is the ephemeral Secret that holds cloud-init
+	// userdata and networkdata. It is deleted by the controller as soon as
+	// the VM reaches Available so the installation script and embedded
+	// passwords are not left on-cluster indefinitely.
+	// +optional
+	CloudInitSecretName string `json:"cloudInitSecretName,omitempty"`
 	// +optional
 	ServiceMonitor string `json:"serviceMonitor,omitempty"`
 	// MetricsServiceName is the headless Service Prometheus scrapes through.

@@ -34,7 +34,7 @@ func TestProbeListenerStubbable(t *testing.T) {
 	t.Cleanup(func() { probeListener = orig })
 
 	called := 0
-	probeListener = func(_ *harvester.Client, _ context.Context, _, _ string, _ int) error {
+	probeListener = func(_ harvester.Interface, _ context.Context, _, _ string, _ int) error {
 		called++
 		return errors.New("refused")
 	}
@@ -46,7 +46,7 @@ func TestProbeListenerStubbable(t *testing.T) {
 		t.Fatalf("expected stub to be called once, got %d", called)
 	}
 
-	probeListener = func(_ *harvester.Client, _ context.Context, _, _ string, _ int) error {
+	probeListener = func(_ harvester.Interface, _ context.Context, _, _ string, _ int) error {
 		return nil
 	}
 	if err := probeListener(nil, context.Background(), "ns", "vm", 5432); err != nil {

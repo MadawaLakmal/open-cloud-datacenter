@@ -100,6 +100,8 @@ type Client struct {
 	MgmtLogicalSwitch string
 }
 
+var _ Interface = (*Client)(nil)
+
 func NewClient(dyn dynamic.Interface, grafanaURL string) *Client {
 	return &Client{Dynamic: dyn, GrafanaURL: grafanaURL}
 }
@@ -226,9 +228,10 @@ func (c *Client) resolveVMImage(ctx context.Context, ref string) (ns, name, sc s
 	return ns, name, sc, err
 }
 
-func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName, secretName, caCertPEM string, err error) {
+func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName, credSecretName, cloudInitSecretName, caCertPEM string, err error) {
 	vmName = fmt.Sprintf("pg-%s", p.ID)
-	secretName = fmt.Sprintf("pg-%s-credentials", p.ID)
+	credSecretName = fmt.Sprintf("pg-%s-credentials", p.ID)
+	cloudInitSecretName = fmt.Sprintf("pg-%s-cloudinit", p.ID)
 
 	// Generate credentials
 	adminPw := randomString(32)
@@ -236,26 +239,26 @@ func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName
 	exporterPw := randomString(24)
 
 	// Generate per-instance TLS: ephemeral CA + server cert signed by that CA.
-	// CA key is stored in the Secret alongside DB credentials (same threat model).
+	// CA key is stored in the credentials Secret alongside DB credentials.
 	tls, tlsErr := generateTLS(vmName)
 	if tlsErr != nil {
 		err = fmt.Errorf("TLS generation: %w", tlsErr)
-		return vmName, secretName, caCertPEM, err
+		return vmName, credSecretName, cloudInitSecretName, caCertPEM, err
 	}
 	caCertPEM = tls.CACertPEM
 
-	// Store credentials, cloud-init user data, and cloud-init network data
-	// in a K8s Secret. KubeVirt's cloudInitNoCloud datasource reads keys
-	// `userdata` and `networkdata` from this Secret and feeds them to the
-	// VM at the `init-local` stage — applying networkData early enough
-	// that systemd-networkd sees the right IP/gateway/DNS *before* it
-	// times out (which is what bit us when we tried writing the netplan
-	// via cloud-init's write_files module instead).
-	cloudInit := buildCloudInit(p, adminPw, replPw, exporterPw, tls)
-	networkData := buildNetworkData(p)
-	secret := newUnstructured("v1", "Secret", secretName, p.Namespace)
-	_ = unstructured.SetNestedField(secret.Object, "Opaque", "type")
-	_ = unstructured.SetNestedField(secret.Object, map[string]any{
+	// Resolve the Harvester VirtualMachineImage before creating any resources
+	// so that a missing image causes an early error without leaving orphan Secrets.
+	imgNs, imgName, imgSC, err := c.resolveVMImage(ctx, p.OSImage)
+	if err != nil {
+		return vmName, credSecretName, cloudInitSecretName, caCertPEM, err
+	}
+
+	// pg-<id>-credentials: long-lived Secret that holds the DB credentials and
+	// TLS material. Shown-once fetch by dc-api; deleted after the fetch.
+	credSecret := newUnstructured("v1", "Secret", credSecretName, p.Namespace)
+	_ = unstructured.SetNestedField(credSecret.Object, "Opaque", "type")
+	_ = unstructured.SetNestedField(credSecret.Object, map[string]any{
 		"admin_user":        p.MasterUser,
 		"admin_password":    adminPw,
 		"repl_password":     replPw,
@@ -264,20 +267,32 @@ func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName
 		"ca_key":            tls.CAKeyPEM,
 		"server_cert":       tls.ServerCertPEM,
 		"server_key":        tls.ServerKeyPEM,
-		"userdata":          cloudInit,
-		"networkdata":       networkData,
 	}, "stringData")
-	if _, e := c.Dynamic.Resource(secretGVR).Namespace(p.Namespace).Create(ctx, secret, metav1.CreateOptions{}); e != nil {
+	if _, e := c.Dynamic.Resource(secretGVR).Namespace(p.Namespace).Create(ctx, credSecret, metav1.CreateOptions{}); e != nil {
 		if err = ignoreAlreadyExists(e); err != nil {
-			return vmName, secretName, caCertPEM, err
+			return vmName, credSecretName, cloudInitSecretName, caCertPEM, err
 		}
 	}
 
-	// Resolve the Harvester VirtualMachineImage so the OS DataVolume can use
-	// the image-managed StorageClass (no cross-namespace PVC clone, no extra RBAC).
-	imgNs, imgName, imgSC, err := c.resolveVMImage(ctx, p.OSImage)
-	if err != nil {
-		return vmName, secretName, caCertPEM, err
+	// pg-<id>-cloudinit: ephemeral Secret that holds cloud-init userdata and
+	// networkdata. KubeVirt's cloudInitNoCloud datasource reads `userdata` and
+	// `networkdata` from this Secret and feeds them to the VM at the init-local
+	// stage — applying networkData early enough that systemd-networkd sees the
+	// right IP/gateway/DNS before it times out. Deleted by the controller once
+	// the VM reaches Available so the installation script and embedded passwords
+	// are not left on-cluster indefinitely.
+	cloudInit := buildCloudInit(p, adminPw, replPw, exporterPw, tls)
+	networkData := buildNetworkData(p)
+	cloudInitSecret := newUnstructured("v1", "Secret", cloudInitSecretName, p.Namespace)
+	_ = unstructured.SetNestedField(cloudInitSecret.Object, "Opaque", "type")
+	_ = unstructured.SetNestedField(cloudInitSecret.Object, map[string]any{
+		"userdata":    cloudInit,
+		"networkdata": networkData,
+	}, "stringData")
+	if _, e := c.Dynamic.Resource(secretGVR).Namespace(p.Namespace).Create(ctx, cloudInitSecret, metav1.CreateOptions{}); e != nil {
+		if err = ignoreAlreadyExists(e); err != nil {
+			return vmName, credSecretName, cloudInitSecretName, caCertPEM, err
+		}
 	}
 
 	// Build VirtualMachine CR
@@ -351,10 +366,10 @@ func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName
 					// never installs. Use the legacy `secretRef` (which
 					// Harvester recognises) for the userdata key, plus
 					// `networkDataSecretRef` for the networkdata key. Both
-					// point at the same Secret.
+					// point at the ephemeral cloud-init Secret.
 					map[string]any{"name": "cloudinit", "cloudInitNoCloud": map[string]any{
-						"secretRef":            map[string]any{"name": secretName},
-						"networkDataSecretRef": map[string]any{"name": secretName},
+						"secretRef":            map[string]any{"name": cloudInitSecretName},
+						"networkDataSecretRef": map[string]any{"name": cloudInitSecretName},
 					}},
 				},
 			},
@@ -381,7 +396,7 @@ func (c *Client) CreatePostgresVM(ctx context.Context, p VMCreateParams) (vmName
 	if _, e := c.Dynamic.Resource(vmGVR).Namespace(p.Namespace).Create(ctx, vm, metav1.CreateOptions{}); e != nil {
 		err = ignoreAlreadyExists(e)
 	}
-	return vmName, secretName, caCertPEM, err
+	return vmName, credSecretName, cloudInitSecretName, caCertPEM, err
 }
 
 // GetVMIReadiness fetches the VMI once and returns phase, IP, and postgres-readiness.
@@ -574,6 +589,7 @@ func (c *Client) TeardownAll(ctx context.Context, id, ns string, refs dbaasv1.Re
 		{vmGVR, ns, refs.VMName},
 		{dvGVR, ns, refs.DataVolumeName},
 		{secretGVR, ns, refs.SecretName},
+		{secretGVR, ns, refs.CloudInitSecretName},
 	}
 
 	var (
@@ -607,6 +623,16 @@ func (c *Client) TeardownAll(ctx context.Context, id, ns string, refs dbaasv1.Re
 		return fmt.Errorf("teardown: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// DeleteSecret deletes a Secret, ignoring NotFound. Used by the controller to
+// clean up the ephemeral cloud-init Secret once the VM reaches Available.
+func (c *Client) DeleteSecret(ctx context.Context, ns, name string) error {
+	err := c.Dynamic.Resource(secretGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // ============================================================

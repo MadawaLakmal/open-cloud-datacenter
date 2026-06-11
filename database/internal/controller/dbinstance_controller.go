@@ -37,7 +37,7 @@ import (
 // probeListener is the function phaseWaitReady calls to confirm postgres
 // is actually accepting TCP before marking the instance DatabaseReady.
 // Package-level var so tests can stub it without doing real network I/O.
-var probeListener = func(c *harvester.Client, ctx context.Context, ns, vmName string, port int) error {
+var probeListener = func(c harvester.Interface, ctx context.Context, ns, vmName string, port int) error {
 	return c.DialVMListener(ctx, ns, vmName, port)
 }
 
@@ -57,7 +57,7 @@ const (
 // updates the status, and requeues for the next phase.
 type DBInstanceReconciler struct {
 	client.Client
-	Harvester *harvester.Client
+	Harvester harvester.Interface
 }
 
 // DBInstance CRD permissions.
@@ -229,7 +229,7 @@ func (r *DBInstanceReconciler) phaseVM(ctx context.Context, inst *dbaasv1.DBInst
 		storageType = defaultStorageType
 	}
 
-	vmName, secretName, caCertPEM, err := r.Harvester.CreatePostgresVM(ctx, harvester.VMCreateParams{
+	vmName, credSecretName, cloudInitSecretName, caCertPEM, err := r.Harvester.CreatePostgresVM(ctx, harvester.VMCreateParams{
 		ID:             id,
 		Namespace:      ns,
 		CPUCores:       classSpec.CPUCores,
@@ -253,10 +253,11 @@ func (r *DBInstanceReconciler) phaseVM(ctx context.Context, inst *dbaasv1.DBInst
 	}
 
 	inst.Status.Resources.VMName = vmName
-	inst.Status.Resources.SecretName = secretName
+	inst.Status.Resources.SecretName = credSecretName
+	inst.Status.Resources.CloudInitSecretName = cloudInitSecretName
 	inst.Status.CACertPEM = caCertPEM
 	inst.Status.MasterUserSecret = &dbaasv1.MasterUserSecretRef{
-		Name:   secretName,
+		Name:   credSecretName,
 		Status: dbaasv1.SecretStatusActive,
 	}
 	// Snapshot the immutable fields as they were applied. reconcileModify
@@ -374,6 +375,16 @@ func (r *DBInstanceReconciler) phaseAvailable(ctx context.Context, inst *dbaasv1
 	inst.Status.ProvisioningPhase = dbaasv1.PhaseAvailable
 	inst.Status.ObservedGeneration = inst.Generation
 	inst.Status.Message = "Database instance is available"
+
+	// On first entry to Available, delete the ephemeral cloud-init Secret so
+	// the installation script and embedded passwords are not left on-cluster.
+	if ciName := inst.Status.Resources.CloudInitSecretName; ciName != "" {
+		if delErr := r.Harvester.DeleteSecret(ctx, inst.Namespace, ciName); delErr != nil {
+			log.FromContext(ctx).Error(delErr, "failed to delete cloud-init secret (non-fatal)", "secret", ciName)
+		} else {
+			inst.Status.Resources.CloudInitSecretName = ""
+		}
+	}
 
 	// Re-check the data-net IP on every requeue — the guest agent may
 	// report it later than initial readiness, or it can change after a VM
