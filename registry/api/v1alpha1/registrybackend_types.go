@@ -72,9 +72,10 @@ type RegistryBackendSpec struct {
 type BackendEngineConfig struct {
 	// HAReplicas is the replica count for the Harbor core. v0.1 supports
 	// only 1; values > 1 require a PostgreSQL + Redis HA topology that is
-	// NOT YET IMPLEMENTED.
+	// NOT YET IMPLEMENTED. The CRD enforces maximum: 1 until HA is wired.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1
 	// +optional
 	HAReplicas int `json:"haReplicas,omitempty"`
 
