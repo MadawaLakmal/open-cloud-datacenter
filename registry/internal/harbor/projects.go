@@ -15,16 +15,24 @@ var ErrProjectNotFound = errors.New("harbor: project not found")
 
 // Project is the subset of Harbor's project model the operator cares about.
 type Project struct {
-	ID   int    `json:"project_id"`
-	Name string `json:"name"`
+	ID     int    `json:"project_id"`
+	Name   string `json:"name"`
+	Public bool   // derived from metadata.public ("true"/"false" string)
 }
 
-// CreateProject creates a Harbor-project with the given name and visibility.
-// Returns the new project's numeric ID. If a project of the same name already
-// exists, returns its ID (idempotent — supports reconciler retries).
+// CreateProject ensures a Harbor-project with the given name and visibility
+// exists. Returns the project's numeric ID.
+//
+// If the project already exists its visibility is reconciled to match public
+// (idempotent drift correction). If it doesn't exist it is created.
 func (c *Client) CreateProject(ctx context.Context, name string, public bool) (int, error) {
-	// Fast path: project already exists.
+	// Fast path: project already exists — reconcile visibility drift.
 	if existing, err := c.GetProjectByName(ctx, name); err == nil {
+		if existing.Public != public {
+			if uerr := c.UpdateProjectVisibility(ctx, existing.ID, public); uerr != nil {
+				return 0, fmt.Errorf("harbor reconcile project visibility: %w", uerr)
+			}
+		}
 		return existing.ID, nil
 	} else if !errors.Is(err, ErrProjectNotFound) {
 		return 0, err
@@ -89,13 +97,16 @@ func (c *Client) GetProjectByName(ctx context.Context, name string) (Project, er
 	var list []struct {
 		ProjectID int    `json:"project_id"`
 		Name      string `json:"name"`
+		Metadata  struct {
+			Public string `json:"public"`
+		} `json:"metadata"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 		return Project{}, fmt.Errorf("harbor get project decode: %w", err)
 	}
 	for _, p := range list {
 		if p.Name == name {
-			return Project{ID: p.ProjectID, Name: p.Name}, nil
+			return Project{ID: p.ProjectID, Name: p.Name, Public: p.Metadata.Public == "true"}, nil
 		}
 	}
 	return Project{}, ErrProjectNotFound
