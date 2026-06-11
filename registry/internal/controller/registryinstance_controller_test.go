@@ -22,6 +22,7 @@ import (
 type fakeHarbor struct {
 	createProjectID  int
 	createProjectErr error
+	lastPublicArg    bool
 	deleteProjectErr error
 	createRobotRet   harbor.Robot
 	createRobotErr   error
@@ -47,8 +48,9 @@ func newFakeHarbor(projectID int, robotName, robotSecret string) *fakeHarbor {
 
 func (f *fakeHarbor) Health(_ context.Context) error { return nil }
 
-func (f *fakeHarbor) CreateProject(_ context.Context, name string, _ bool) (int, error) {
+func (f *fakeHarbor) CreateProject(_ context.Context, name string, public bool) (int, error) {
 	f.createdProjects = append(f.createdProjects, name)
+	f.lastPublicArg = public
 	return f.createProjectID, f.createProjectErr
 }
 
@@ -308,6 +310,43 @@ var _ = Describe("RegistryInstance Controller", func() {
 			Expect(sec.Labels[LabelTenant]).To(Equal("stub"))
 			Expect(sec.Labels[LabelProject]).To(Equal("billing"))
 
+			_ = k8sClient.Delete(ctx, sec)
+		})
+	})
+
+	Context("Visibility drift reconciliation", func() {
+		It("passes the updated public flag to CreateProject on spec change", func() {
+			readyBackend(backendName)
+
+			ri := newInstance(instanceName, projectNS, backendName, tenantNS, projectName)
+			ri.Finalizers = []string{InstanceFinalizer}
+			ri.Spec.EngineConfig.Public = false
+			Expect(k8sClient.Create(ctx, ri)).To(Succeed())
+
+			r := newReconciler()
+			// First reconcile: project created with public=false.
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeHC.lastPublicArg).To(BeFalse())
+
+			// Flip spec to public=true.
+			updated := &registryv1alpha1.RegistryInstance{}
+			Expect(k8sClient.Get(ctx, instanceKey, updated)).To(Succeed())
+			updated.Spec.EngineConfig.Public = true
+			Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+
+			// Second reconcile: CreateProject must be called with public=true so
+			// the real harbor client can reconcile the visibility drift.
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeHC.lastPublicArg).To(BeTrue(), "CreateProject must reflect the updated public flag")
+
+			updated2 := &registryv1alpha1.RegistryInstance{}
+			Expect(k8sClient.Get(ctx, instanceKey, updated2)).To(Succeed())
+			sec := &corev1.Secret{}
+			_ = k8sClient.Get(ctx, types.NamespacedName{
+				Name: updated2.Status.Endpoint.SecretRef.Name, Namespace: projectNS,
+			}, sec)
 			_ = k8sClient.Delete(ctx, sec)
 		})
 	})
