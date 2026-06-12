@@ -90,6 +90,11 @@ func (r *RegistryInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
+	if hc == nil {
+		return ctrl.Result{}, r.failPhase(ctx, &ri, "BackendUnavailable",
+			fmt.Errorf("backend %s is Ready but has no endpoint", backend.Name))
+	}
+
 	r.setPhase(&ri, registryv1alpha1.PhaseProvisioning, "Provisioning",
 		"creating harbor project and robot")
 	_ = r.Status().Update(ctx, &ri)
@@ -165,7 +170,7 @@ func (r *RegistryInstanceReconciler) resolveBackend(ctx context.Context, ri *reg
 	}
 
 	if rb.Status.Endpoint == nil || rb.Status.Endpoint.SecretRef == nil {
-		return &rb, nil, fmt.Errorf("backend %s/%s has no endpoint yet", backendNS, backendName)
+		return &rb, nil, nil
 	}
 
 	var adminSecret corev1.Secret
