@@ -91,6 +91,7 @@ func (r *Runner) Ensure(ctx context.Context, opts InstallOptions) (*release.Rele
 	client.Namespace = opts.Namespace
 	client.Wait = true
 	client.Timeout = opts.Timeout
+	client.ReuseValues = true
 	log.Info("helm upgrade",
 		"release", opts.ReleaseName,
 		"namespace", opts.Namespace,
